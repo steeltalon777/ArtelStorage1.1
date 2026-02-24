@@ -1,25 +1,20 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 
-# Virtual envs
+# Virtualenv
 .venv/
 venv/
 
-# Build artifacts
-build/
-dist/
-dist_installer/
-*.spec
-
 # IDE
 .idea/
-.vscode/
 
-# Local runtime files
-*.log
-*.tmp
+# Database
+*.db
+*.sqlite3
 
-# Database and generated docs in runtime (uncomment if needed)
-# db/*.db
-# db/pdf/
+# OS
+.DS_Store
+Thumbs.db
