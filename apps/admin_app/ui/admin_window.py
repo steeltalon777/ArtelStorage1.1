@@ -9,6 +9,7 @@ from core.services.users_service import UsersService
 from .categories_tab import CategoriesTab
 from .import_export_tab import ImportExportTab
 from .items_tab import ItemsTab
+from .sync_tab import SyncTab
 from .users_tab import UsersTab
 
 
@@ -40,11 +41,13 @@ class AdminWindow(QMainWindow):
             on_import_finished=self._reload_all,
             parent=self,
         )
+        self.sync_tab = SyncTab(db_path, self)
 
         self.tabs.addTab(self.items_tab, "ТМЦ")
         self.tabs.addTab(self.categories_tab, "Категории")
         self.tabs.addTab(self.users_tab, "Пользователи")
         self.tabs.addTab(self.import_export_tab, "Экспорт/Импорт")
+        self.tabs.addTab(self.sync_tab, "Синхронизация")
 
         status = QStatusBar(self)
         self.setStatusBar(status)
@@ -57,3 +60,4 @@ class AdminWindow(QMainWindow):
         self.items_tab.reload_categories()
         self.items_tab.reload_items()
         self.users_tab.reload_users()
+        self.sync_tab.reload()

@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import time
+import uuid
 from pathlib import Path
 from uuid import UUID
 from typing import Optional
@@ -87,6 +88,104 @@ class Database:
                 self._create_v1_schema(conn)
                 conn.execute("INSERT INTO schema_version (version) VALUES (1)")
                 conn.commit()
+                current_ver = 1
+            else:
+                current_ver = int(current_version["version"])
+
+            if current_ver < 2:
+                self._upgrade_to_v2(conn)
+                conn.execute("INSERT INTO schema_version (version) VALUES (2)")
+                conn.commit()
+
+    def _column_exists(self, conn, table: str, column: str) -> bool:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(r["name"] == column for r in rows)
+
+    def _upgrade_to_v2(self, conn):
+        """Обновляет схему БД до версии 2 (offline-first sync MVP)."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                server_url TEXT NOT NULL DEFAULT '',
+                api_key TEXT,
+                site_uuid UUID,
+                device_uuid UUID NOT NULL,
+                enabled BOOLEAN NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_server_seq INTEGER DEFAULT 0,
+                catalog_items_updated_after TIMESTAMP,
+                catalog_categories_updated_after TIMESTAMP,
+                last_ping_at TIMESTAMP,
+                last_sync_at TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_uuid UUID UNIQUE NOT NULL,
+                site_uuid UUID NOT NULL,
+                device_uuid UUID NOT NULL,
+                batch_uuid UUID NOT NULL,
+                event_type TEXT NOT NULL,
+                event_datetime TIMESTAMP NOT NULL,
+                schema_version INTEGER DEFAULT 1,
+                payload_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending','sending','acked','duplicate','rejected','dead')),
+                server_seq INTEGER,
+                try_count INTEGER DEFAULT 0,
+                next_try_at TIMESTAMP,
+                last_error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        if not self._column_exists(conn, "categories", "server_uuid"):
+            conn.execute("ALTER TABLE categories ADD COLUMN server_uuid UUID")
+        if not self._column_exists(conn, "categories", "updated_at"):
+            conn.execute("ALTER TABLE categories ADD COLUMN updated_at TIMESTAMP")
+        if not self._column_exists(conn, "categories", "is_active"):
+            conn.execute("ALTER TABLE categories ADD COLUMN is_active BOOLEAN DEFAULT 1")
+        if not self._column_exists(conn, "categories", "parent_server_uuid"):
+            conn.execute("ALTER TABLE categories ADD COLUMN parent_server_uuid UUID")
+
+        if not self._column_exists(conn, "items", "server_uuid"):
+            conn.execute("ALTER TABLE items ADD COLUMN server_uuid UUID")
+        if not self._column_exists(conn, "items", "sku"):
+            conn.execute("ALTER TABLE items ADD COLUMN sku TEXT")
+        if not self._column_exists(conn, "items", "updated_at"):
+            conn.execute("ALTER TABLE items ADD COLUMN updated_at TIMESTAMP")
+        if not self._column_exists(conn, "items", "is_active"):
+            conn.execute("ALTER TABLE items ADD COLUMN is_active BOOLEAN DEFAULT 1")
+
+        if not self._column_exists(conn, "sites", "server_uuid"):
+            conn.execute("ALTER TABLE sites ADD COLUMN server_uuid UUID")
+        if not self._column_exists(conn, "sites", "updated_at"):
+            conn.execute("ALTER TABLE sites ADD COLUMN updated_at TIMESTAMP")
+        if not self._column_exists(conn, "sites", "is_active"):
+            conn.execute("ALTER TABLE sites ADD COLUMN is_active BOOLEAN DEFAULT 1")
+
+        device_uuid = str(uuid.uuid4())
+        conn.execute(
+            "INSERT OR IGNORE INTO sync_settings (id, device_uuid, server_url, enabled) VALUES (1, ?, '', 0)",
+            (device_uuid,),
+        )
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_server_uuid ON categories(server_uuid) WHERE server_uuid IS NOT NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_items_server_uuid ON items(server_uuid) WHERE server_uuid IS NOT NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_server_uuid ON sites(server_uuid) WHERE server_uuid IS NOT NULL")
+        conn.execute("INSERT OR IGNORE INTO sync_state (id) VALUES (1)")
     
     def _create_v1_schema(self, conn):
         """Создает схему версии 1"""

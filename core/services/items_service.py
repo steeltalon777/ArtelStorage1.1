@@ -20,10 +20,11 @@ class ItemsService:
             cursor = conn.execute(
                 """
                 SELECT 
-                    i.id, i.name, i.unit, i.category_id, i.created_locally, i.created_at,
+                    i.id, i.name, i.unit, i.category_id, i.created_locally, i.created_at, i.server_uuid,
                     c.name as category_name
                 FROM items i
                 LEFT JOIN categories c ON i.category_id = c.id
+                WHERE COALESCE(i.is_active,1)=1
                 ORDER BY i.name
                 """
             )
@@ -72,6 +73,8 @@ class ItemsService:
     
     def create_item(self, name: str, unit: str, category_id: Optional[int] = None) -> Item:
         """Создает новую ТМЦ"""
+        if self._sync_enabled():
+            raise ValueError("При включенной синхронизации создание локальных ТМЦ запрещено")
         item_id = uuid4()
         
         with self.db.get_connection() as conn:
@@ -89,6 +92,8 @@ class ItemsService:
     def update_item(self, item_id: UUID, name: Optional[str] = None, 
                    unit: Optional[str] = None, category_id: Optional[int] = None) -> bool:
         """Обновляет данные ТМЦ"""
+        if self._is_server_item(item_id):
+            raise ValueError("Серверная ТМЦ доступна только для чтения")
         updates = []
         params = []
         
@@ -196,3 +201,64 @@ class ItemsService:
                 ))
             
             return items
+
+    def upsert_server_items(self, items: List[dict]):
+        with self.db.get_connection() as conn:
+            for item in items:
+                server_uuid = item.get("server_uuid") or item.get("id")
+                category_server_uuid = item.get("category_server_uuid") or item.get("category_id")
+                category_id = None
+                if category_server_uuid:
+                    category_row = conn.execute(
+                        "SELECT id FROM categories WHERE server_uuid=?",
+                        (category_server_uuid,),
+                    ).fetchone()
+                    if category_row:
+                        category_id = category_row["id"]
+
+                row = conn.execute("SELECT id FROM items WHERE server_uuid=?", (server_uuid,)).fetchone()
+                if row:
+                    conn.execute(
+                        """
+                        UPDATE items
+                        SET name=?, unit=?, category_id=?, sku=?, updated_at=?, is_active=?, created_locally=0
+                        WHERE id=?
+                        """,
+                        (
+                            item.get("name"),
+                            item.get("unit") or "шт",
+                            category_id,
+                            item.get("sku"),
+                            item.get("updated_at"),
+                            1 if item.get("is_active", True) else 0,
+                            row["id"],
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO items (id, name, unit, category_id, created_locally, server_uuid, sku, updated_at, is_active)
+                        VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
+                        """,
+                        (
+                            uuid4(),
+                            item.get("name"),
+                            item.get("unit") or "шт",
+                            category_id,
+                            server_uuid,
+                            item.get("sku"),
+                            item.get("updated_at"),
+                            1 if item.get("is_active", True) else 0,
+                        ),
+                    )
+            conn.commit()
+
+    def _sync_enabled(self) -> bool:
+        with self.db.get_connection() as conn:
+            row = conn.execute("SELECT enabled FROM sync_settings WHERE id = 1").fetchone()
+            return bool(row and row["enabled"])
+
+    def _is_server_item(self, item_id: UUID) -> bool:
+        with self.db.get_connection() as conn:
+            row = conn.execute("SELECT server_uuid FROM items WHERE id=?", (item_id,)).fetchone()
+            return bool(row and row["server_uuid"])

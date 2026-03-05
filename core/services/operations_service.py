@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 from ..db import get_db
 from .pdf_service import PdfService
+from .sync_outbox_service import SyncOutboxService
 
 
 class OperationsService:
@@ -14,6 +15,7 @@ class OperationsService:
     def __init__(self, db_path: Optional[str] = None):
         self.db = get_db(db_path)
         self.pdf_service = PdfService(db_path)
+        self.sync_outbox_service = SyncOutboxService(db_path)
 
     def get_local_site(self) -> Dict:
         with self.db.get_connection() as conn:
@@ -176,6 +178,15 @@ class OperationsService:
                     "INSERT INTO operation_lines (operation_id, item_id, qty) VALUES (?, ?, ?)",
                     (operation_id, line["item_id"], line["qty"]),
                 )
+
+            self.sync_outbox_service.enqueue_operation_event(
+                conn=conn,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                event_datetime=created_at,
+                comment=comment,
+                lines=normalized_lines,
+            )
 
             conn.commit()
 
