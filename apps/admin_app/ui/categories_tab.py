@@ -43,8 +43,8 @@ class CategoriesTab(QWidget):
         controls.addWidget(delete_button)
         controls.addWidget(refresh_button)
 
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["ID", "Название", "ТМЦ"])
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["ID", "Название", "ТМЦ", "Источник"])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemSelectionChanged.connect(self._fill_form)
@@ -60,6 +60,7 @@ class CategoriesTab(QWidget):
             self.table.setItem(row, 0, QTableWidgetItem(str(category["id"])))
             self.table.setItem(row, 1, QTableWidgetItem(category["name"]))
             self.table.setItem(row, 2, QTableWidgetItem(str(category["item_count"])))
+            self.table.setItem(row, 3, QTableWidgetItem(category["source"]))
 
         self.table.resizeColumnsToContents()
 

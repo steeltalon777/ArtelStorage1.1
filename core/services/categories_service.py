@@ -17,7 +17,7 @@ class CategoriesService:
         """Возвращает все категории"""
         with self.db.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT id, name, created_at FROM categories ORDER BY name"
+                "SELECT id, name, created_at FROM categories WHERE COALESCE(is_active,1)=1 ORDER BY name"
             )
             
             categories = []
@@ -66,6 +66,8 @@ class CategoriesService:
     
     def create_category(self, name: str) -> Category:
         """Создает новую категорию"""
+        if self._sync_enabled():
+            raise ValueError("При включенной синхронизации создание локальных категорий запрещено")
         with self.db.get_connection() as conn:
             try:
                 cursor = conn.execute(
@@ -83,6 +85,8 @@ class CategoriesService:
     
     def update_category(self, category_id: int, name: str) -> bool:
         """Обновляет название категории"""
+        if self._is_server_category(category_id):
+            raise ValueError("Категория из сервера доступна только для чтения")
         with self.db.get_connection() as conn:
             try:
                 cursor = conn.execute(
@@ -142,6 +146,7 @@ class CategoriesService:
                 SELECT 
                     c.id,
                     c.name,
+                    c.server_uuid,
                     COUNT(i.id) as item_count,
                     COUNT(DISTINCT ol.operation_id) as operation_count
                 FROM categories c
@@ -157,8 +162,55 @@ class CategoriesService:
                 stats.append({
                     'id': row['id'],
                     'name': row['name'],
+                    'source': 'server' if row['server_uuid'] else 'local',
                     'item_count': row['item_count'],
                     'operation_count': row['operation_count']
                 })
             
             return stats
+
+    def upsert_server_categories(self, categories: List[dict]):
+        with self.db.get_connection() as conn:
+            for cat in categories:
+                server_uuid = cat.get("server_uuid") or cat.get("id")
+                row = conn.execute("SELECT id FROM categories WHERE server_uuid = ?", (server_uuid,)).fetchone()
+                if row:
+                    conn.execute(
+                        """
+                        UPDATE categories
+                        SET name=?, updated_at=?, is_active=?, parent_server_uuid=?
+                        WHERE id=?
+                        """,
+                        (
+                            cat.get("name"),
+                            cat.get("updated_at"),
+                            1 if cat.get("is_active", True) else 0,
+                            cat.get("parent_server_uuid"),
+                            row["id"],
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO categories (name, server_uuid, updated_at, is_active, parent_server_uuid)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            cat.get("name"),
+                            server_uuid,
+                            cat.get("updated_at"),
+                            1 if cat.get("is_active", True) else 0,
+                            cat.get("parent_server_uuid"),
+                        ),
+                    )
+            conn.commit()
+
+    def _sync_enabled(self) -> bool:
+        with self.db.get_connection() as conn:
+            row = conn.execute("SELECT enabled FROM sync_settings WHERE id = 1").fetchone()
+            return bool(row and row["enabled"])
+
+    def _is_server_category(self, category_id: int) -> bool:
+        with self.db.get_connection() as conn:
+            row = conn.execute("SELECT server_uuid FROM categories WHERE id=?", (category_id,)).fetchone()
+            return bool(row and row["server_uuid"])

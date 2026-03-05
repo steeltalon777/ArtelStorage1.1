@@ -55,8 +55,8 @@ class ItemsTab(QWidget):
         controls.addStretch(1)
         controls.addWidget(refresh_button)
 
-        self.items_table.setColumnCount(4)
-        self.items_table.setHorizontalHeaderLabels(["ID", "Наименование", "Ед.", "Категория"])
+        self.items_table.setColumnCount(5)
+        self.items_table.setHorizontalHeaderLabels(["ID", "Наименование", "Ед.", "Категория", "Источник"])
         self.items_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.items_table.horizontalHeader().setStretchLastSection(True)
         self.items_table.itemSelectionChanged.connect(self._fill_form_from_selection)
@@ -87,6 +87,7 @@ class ItemsTab(QWidget):
             self.items_table.setItem(row, 1, QTableWidgetItem(item.name))
             self.items_table.setItem(row, 2, QTableWidgetItem(item.unit))
             self.items_table.setItem(row, 3, QTableWidgetItem(item.category_name or "-"))
+            self.items_table.setItem(row, 4, QTableWidgetItem("local" if item.created_locally else "server"))
 
         self.items_table.resizeColumnsToContents()
 
