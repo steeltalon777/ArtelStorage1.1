@@ -169,8 +169,11 @@ class CategoriesService:
             
             return stats
 
-    def upsert_server_categories(self, categories: List[dict]):
-        with self.db.get_connection() as conn:
+    def upsert_server_categories(self, categories: List[dict], conn=None):
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.db.get_connection()
+        try:
             for cat in categories:
                 server_uuid = cat.get("server_uuid") or cat.get("id")
                 row = conn.execute("SELECT id FROM categories WHERE server_uuid = ?", (server_uuid,)).fetchone()
@@ -203,7 +206,11 @@ class CategoriesService:
                             cat.get("parent_server_uuid"),
                         ),
                     )
-            conn.commit()
+            if owns_connection:
+                conn.commit()
+        finally:
+            if owns_connection:
+                conn.close()
 
     def _sync_enabled(self) -> bool:
         with self.db.get_connection() as conn:

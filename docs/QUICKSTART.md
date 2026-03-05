@@ -38,6 +38,18 @@ python admin_app.py --db "C:\\Users\\<user>\\Documents\\ArtelStorage\\storage.db
 
 Админка требует вход пользователя с правами администратора.
 
+## Быстрая настройка синхронизации (админка)
+Откройте вкладку sync и заполните:
+- `Server URL` — адрес Sync API (`https://...`).
+- `Site UUID` — UUID площадки на сервере.
+- `Device Token` — секрет устройства (заголовок `X-Device-Token`).
+- `Client Version` — версия клиента (например, `ArtelStorage/1.1`).
+
+Далее:
+1. Нажмите `Сохранить`.
+2. Включите чекбокс синхронизации.
+3. Нажмите `Синхронизировать сейчас`.
+
 ## Операции и накладные
 - Доступные операции: `приход`, `расход`, `списание`, `перемещение`.
 - Накладные генерируются для всех операций, кроме `прихода`.
@@ -45,6 +57,7 @@ python admin_app.py --db "C:\\Users\\<user>\\Documents\\ArtelStorage\\storage.db
 ## Проверка ядра и сервисов
 ```bash
 python final_test.py
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
 ## Миграция данных из v0.1

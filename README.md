@@ -7,6 +7,7 @@
 - Операции: `incoming`, `issue`, `writeoff`, `move`.
 - PDF-накладные для всех операций, кроме `incoming`.
 - Экспорт/импорт данных (Snapshot v1).
+- Offline-first синхронизация с Sync API (`/ping`, `/push`, `/pull`, `/catalog/*`).
 - Отдельные приложения: основное и административное.
 
 ## Запуск
@@ -30,6 +31,7 @@ python admin_app.py
 ## Проверка
 ```bash
 python final_test.py
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
 ## Документация

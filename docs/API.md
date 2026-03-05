@@ -1,4 +1,4 @@
-﻿# API
+# API
 
 ## Общие правила
 - SQL допускается только в `core/*`.
@@ -38,6 +38,7 @@
 - `can_delete_item(item_id)`
 - `delete_item(item_id)`
 - `search_items(query)`
+- `upsert_server_items(items, conn=None)`
 
 ## CategoriesService
 Файл: `core/services/categories_service.py`
@@ -49,6 +50,7 @@
 - `can_delete_category(category_id)`
 - `delete_category(category_id)`
 - `get_category_stats()`
+- `upsert_server_categories(categories, conn=None)`
 
 ## OperationsService
 Файл: `core/services/operations_service.py`
@@ -92,3 +94,55 @@
 - `import_snapshot(snapshot)`
 
 Импорт заменяет текущие данные в БД в рамках транзакции.
+
+## SyncClient
+Файл: `core/services/sync_client.py`
+
+- `ping(payload)`
+- `push_events(payload)`
+- `pull_events(payload)`
+- `get_catalog_items(payload)`
+- `get_catalog_categories(payload)`
+
+Особенности:
+- Обязательные заголовки: `X-Device-Token` (и `X-Site-Id`/`X-Device-Id` для `/catalog/*`).
+- Опциональный заголовок: `X-Client-Version`.
+- Для ответа добавляется `_meta`: `endpoint`, `status_code`, `latency_ms`, `request_id`.
+- Ошибки HTTP/сети пробрасываются как `SyncHttpError`.
+
+## SyncOrchestrator
+Файл: `core/services/sync_orchestrator.py`
+
+Основной метод:
+- `sync_once()`
+
+Порядок цикла:
+1. `/ping` (heartbeat, `server_seq_upto`, `backoff_seconds`)
+2. `/push` (батчами outbox)
+3. `/pull` (страницами до догонки курсора)
+4. `/catalog/categories` (инкрементально)
+5. `/catalog/items` (инкрементально)
+
+Гарантии:
+- Retry + exponential backoff + jitter для сетевых/`5xx`/`429`.
+- Ограничение частоты: `/ping` не чаще 1 раза в 5 сек, `/push` не чаще 1 раза в 1 сек.
+- Курсор `since_seq` хранится отдельно на `site_uuid`.
+- Курсоры `updated_after` отдельно для `items` и `categories`.
+- HTTP-телеметрия сохраняется в `sync_logs`.
+
+## SyncOutboxService
+Файл: `core/services/sync_outbox_service.py`
+
+- `enqueue_operation_event(...)`
+- `get_pending(limit=200)`
+- `mark_sending(ids)`
+- `apply_push_result(response)`
+- `mark_batch_failed(ids, reason)`
+- `list_queue(limit=500)`
+- `pending_count()`
+
+Правила:
+- Для каждого исходящего события генерируется `event_uuid` (UUIDv4).
+- `qty` в payload сериализуется как decimal-строка с 3 знаками.
+- `accepted`/`duplicates` удаляются из outbox.
+- `uuid_collision` помечается как конфликт (`status='rejected'`, `is_conflict=1`).

@@ -96,6 +96,12 @@ class Database:
                 self._upgrade_to_v2(conn)
                 conn.execute("INSERT INTO schema_version (version) VALUES (2)")
                 conn.commit()
+                current_ver = 2
+
+            if current_ver < 3:
+                self._upgrade_to_v3(conn)
+                conn.execute("INSERT INTO schema_version (version) VALUES (3)")
+                conn.commit()
 
     def _column_exists(self, conn, table: str, column: str) -> bool:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -186,6 +192,64 @@ class Database:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_items_server_uuid ON items(server_uuid) WHERE server_uuid IS NOT NULL")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_server_uuid ON sites(server_uuid) WHERE server_uuid IS NOT NULL")
         conn.execute("INSERT OR IGNORE INTO sync_state (id) VALUES (1)")
+
+    def _upgrade_to_v3(self, conn):
+        """Обновляет схему БД до версии 3 (sync hardening + telemetry)."""
+        if not self._column_exists(conn, "sync_settings", "device_token"):
+            conn.execute("ALTER TABLE sync_settings ADD COLUMN device_token TEXT")
+        if not self._column_exists(conn, "sync_settings", "client_version"):
+            conn.execute("ALTER TABLE sync_settings ADD COLUMN client_version TEXT")
+
+        # Backward compatibility for earlier field naming.
+        conn.execute("UPDATE sync_settings SET device_token = COALESCE(device_token, api_key)")
+        conn.execute("UPDATE sync_settings SET client_version = COALESCE(client_version, 'ArtelStorage/1.1')")
+
+        if not self._column_exists(conn, "sync_outbox", "is_conflict"):
+            conn.execute("ALTER TABLE sync_outbox ADD COLUMN is_conflict BOOLEAN NOT NULL DEFAULT 0")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_site_state (
+                site_uuid UUID PRIMARY KEY,
+                since_seq INTEGER NOT NULL DEFAULT 0,
+                catalog_items_updated_after TIMESTAMP,
+                catalog_categories_updated_after TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_inbox_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_uuid UUID NOT NULL,
+                server_seq INTEGER NOT NULL,
+                event_uuid UUID,
+                event_type TEXT,
+                event_datetime TIMESTAMP,
+                schema_version INTEGER,
+                payload_json TEXT NOT NULL,
+                received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(site_uuid, server_seq)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                endpoint TEXT NOT NULL,
+                status_code INTEGER,
+                latency_ms INTEGER,
+                request_id TEXT,
+                batch_size INTEGER,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_outbox_status ON sync_outbox(status, next_try_at, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_inbox_site_seq ON sync_inbox_events(site_uuid, server_seq)")
     
     def _create_v1_schema(self, conn):
         """Создает схему версии 1"""

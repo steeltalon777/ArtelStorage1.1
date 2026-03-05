@@ -1,6 +1,8 @@
 import hashlib
 import json
-from datetime import datetime, timedelta
+import random
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional
 from uuid import UUID, uuid4
 
@@ -9,6 +11,8 @@ from .sync_settings_service import SyncSettingsService
 
 
 class SyncOutboxService:
+    MAX_RETRIES = 10
+
     def __init__(self, db_path: Optional[str] = None):
         self.db = get_db(db_path)
         self.settings_service = SyncSettingsService(db_path)
@@ -21,7 +25,14 @@ class SyncOutboxService:
             "doc_id": str(operation_id),
             "doc_type": operation_type,
             "comment": comment,
-            "lines": [{"item_id": str(line["item_id"]), "qty": line["qty"], "batch": None} for line in lines],
+            "lines": [
+                {
+                    "item_id": str(line["item_id"]),
+                    "qty": self._format_qty(line["qty"]),
+                    "batch": None,
+                }
+                for line in lines
+            ],
         }
         payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         conn.execute(
@@ -32,7 +43,7 @@ class SyncOutboxService:
             ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 'pending')
             """,
             (
-                str(operation_id),
+                str(uuid4()),
                 settings["site_uuid"],
                 settings["device_uuid"],
                 str(uuid4()),
@@ -49,6 +60,7 @@ class SyncOutboxService:
                 """
                 SELECT * FROM sync_outbox
                 WHERE status IN ('pending','sending')
+                  AND COALESCE(is_conflict, 0) = 0
                   AND (next_try_at IS NULL OR next_try_at <= CURRENT_TIMESTAMP)
                 ORDER BY created_at ASC
                 LIMIT ?
@@ -66,33 +78,56 @@ class SyncOutboxService:
             conn.commit()
 
     def apply_push_result(self, response: Dict):
-        accepted = set(response.get("accepted", []))
-        duplicates = set(response.get("duplicates", []))
-        rejected = response.get("rejected", {})
-        server_seq = response.get("server_seq_upto")
+        accepted = self._extract_event_uuids(response.get("accepted", []))
+        duplicates = self._extract_event_uuids(response.get("duplicates", []))
+        rejected = self._extract_rejected(response.get("rejected", {}))
 
         with self.db.get_connection() as conn:
             for uuid_value in accepted:
-                conn.execute("UPDATE sync_outbox SET status='acked', server_seq=?, last_error=NULL WHERE event_uuid=?", (server_seq, uuid_value))
+                conn.execute("DELETE FROM sync_outbox WHERE event_uuid=?", (uuid_value,))
             for uuid_value in duplicates:
-                conn.execute("UPDATE sync_outbox SET status='duplicate', server_seq=?, last_error=NULL WHERE event_uuid=?", (server_seq, uuid_value))
+                conn.execute("DELETE FROM sync_outbox WHERE event_uuid=?", (uuid_value,))
             for uuid_value, reason in rejected.items():
                 row = conn.execute("SELECT try_count FROM sync_outbox WHERE event_uuid=?", (uuid_value,)).fetchone()
                 if not row:
                     continue
                 try_count = int(row["try_count"]) + 1
-                status = "dead" if try_count >= 20 else "pending"
-                backoff_seconds = min(2 ** try_count * 5, 600)
-                next_try = (datetime.now() + timedelta(seconds=backoff_seconds)).isoformat(sep=" ")
+                status = "dead" if try_count >= self.MAX_RETRIES else "pending"
+                next_try = self._calc_next_try_at(try_count)
+                is_conflict = 0
                 if reason == "uuid_collision":
                     status = "rejected"
+                    next_try = None
+                    is_conflict = 1
+                conn.execute(
+                    """
+                    UPDATE sync_outbox
+                    SET status=?, try_count=?, next_try_at=?, last_error=?, is_conflict=?
+                    WHERE event_uuid=?
+                    """,
+                    (status, try_count, next_try, str(reason), is_conflict, uuid_value),
+                )
+            conn.commit()
+
+    def mark_batch_failed(self, ids: List[int], reason: str):
+        if not ids:
+            return
+        placeholders = ",".join(["?"] * len(ids))
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT id, try_count FROM sync_outbox WHERE id IN ({placeholders})",
+                ids,
+            ).fetchall()
+            for row in rows:
+                try_count = int(row["try_count"]) + 1
+                status = "dead" if try_count >= self.MAX_RETRIES else "pending"
                 conn.execute(
                     """
                     UPDATE sync_outbox
                     SET status=?, try_count=?, next_try_at=?, last_error=?
-                    WHERE event_uuid=?
+                    WHERE id=?
                     """,
-                    (status, try_count, next_try, str(reason), uuid_value),
+                    (status, try_count, self._calc_next_try_at(try_count), reason, row["id"]),
                 )
             conn.commit()
 
@@ -103,5 +138,46 @@ class SyncOutboxService:
 
     def pending_count(self) -> int:
         with self.db.get_connection() as conn:
-            row = conn.execute("SELECT COUNT(*) AS c FROM sync_outbox WHERE status IN ('pending','sending')").fetchone()
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM sync_outbox WHERE status IN ('pending','sending') AND COALESCE(is_conflict,0)=0"
+            ).fetchone()
             return int(row["c"])
+
+    def _calc_next_try_at(self, try_count: int) -> str:
+        base = 1.0
+        factor = 2.0
+        max_delay = 60.0
+        jitter = random.uniform(0.8, 1.2)
+        delay = min(base * (factor ** max(0, try_count - 1)), max_delay) * jitter
+        return (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(sep=" ")
+
+    def _format_qty(self, value) -> str:
+        quantized = Decimal(str(value)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+        return f"{quantized:.3f}"
+
+    def _extract_event_uuids(self, events) -> set:
+        uuids = set()
+        if isinstance(events, list):
+            for value in events:
+                if isinstance(value, str):
+                    uuids.add(value)
+                elif isinstance(value, dict):
+                    event_uuid = value.get("event_uuid") or value.get("uuid")
+                    if event_uuid:
+                        uuids.add(str(event_uuid))
+        return uuids
+
+    def _extract_rejected(self, rejected) -> Dict[str, str]:
+        result: Dict[str, str] = {}
+        if isinstance(rejected, dict):
+            for key, value in rejected.items():
+                result[str(key)] = str(value)
+            return result
+        if isinstance(rejected, list):
+            for value in rejected:
+                if isinstance(value, dict):
+                    event_uuid = value.get("event_uuid") or value.get("uuid")
+                    reason = value.get("reason") or value.get("error") or "rejected"
+                    if event_uuid:
+                        result[str(event_uuid)] = str(reason)
+        return result

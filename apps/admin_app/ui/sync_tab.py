@@ -28,6 +28,8 @@ class SyncTab(QWidget):
         self.server_url_input = QLineEdit(self)
         self.site_uuid_input = QLineEdit(self)
         self.device_uuid_input = QLineEdit(self)
+        self.device_token_input = QLineEdit(self)
+        self.client_version_input = QLineEdit(self)
         self.enabled_checkbox = QCheckBox("Включить синхронизацию", self)
 
         self.status_label = QLabel("-", self)
@@ -48,6 +50,8 @@ class SyncTab(QWidget):
         settings_form.addRow("Server URL", self.server_url_input)
         settings_form.addRow("Site UUID", self.site_uuid_input)
         settings_form.addRow("Device UUID", self.device_uuid_input)
+        settings_form.addRow("Device Token", self.device_token_input)
+        settings_form.addRow("Client Version", self.client_version_input)
         settings_form.addRow("", self.enabled_checkbox)
 
         settings_controls = QHBoxLayout()
@@ -85,6 +89,8 @@ class SyncTab(QWidget):
         self.server_url_input.setText(settings["server_url"])
         self.site_uuid_input.setText(settings["site_uuid"])
         self.device_uuid_input.setText(settings["device_uuid"])
+        self.device_token_input.setText(settings.get("device_token", ""))
+        self.client_version_input.setText(settings.get("client_version", ""))
         self.enabled_checkbox.setChecked(settings["enabled"])
 
         queue = self.outbox_service.list_queue(limit=200)
@@ -116,6 +122,8 @@ class SyncTab(QWidget):
                 server_url=self.server_url_input.text(),
                 site_uuid=self.site_uuid_input.text(),
                 enabled=self.enabled_checkbox.isChecked(),
+                device_token=self.device_token_input.text(),
+                client_version=self.client_version_input.text(),
             )
             QMessageBox.information(self, "Синхронизация", "Настройки сохранены")
             self.reload()

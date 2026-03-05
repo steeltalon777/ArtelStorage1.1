@@ -202,8 +202,11 @@ class ItemsService:
             
             return items
 
-    def upsert_server_items(self, items: List[dict]):
-        with self.db.get_connection() as conn:
+    def upsert_server_items(self, items: List[dict], conn=None):
+        owns_connection = conn is None
+        if conn is None:
+            conn = self.db.get_connection()
+        try:
             for item in items:
                 server_uuid = item.get("server_uuid") or item.get("id")
                 category_server_uuid = item.get("category_server_uuid") or item.get("category_id")
@@ -251,7 +254,11 @@ class ItemsService:
                             1 if item.get("is_active", True) else 0,
                         ),
                     )
-            conn.commit()
+            if owns_connection:
+                conn.commit()
+        finally:
+            if owns_connection:
+                conn.close()
 
     def _sync_enabled(self) -> bool:
         with self.db.get_connection() as conn:
