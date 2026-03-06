@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from ..db import get_db
 from ..schema import Category
+from .time_utils import to_sqlite_timestamp
 
 
 class CategoriesService:
@@ -186,7 +187,7 @@ class CategoriesService:
                         """,
                         (
                             cat.get("name"),
-                            cat.get("updated_at"),
+                            to_sqlite_timestamp(cat.get("updated_at")),
                             1 if cat.get("is_active", True) else 0,
                             cat.get("parent_server_uuid"),
                             row["id"],
@@ -201,7 +202,7 @@ class CategoriesService:
                         (
                             cat.get("name"),
                             server_uuid,
-                            cat.get("updated_at"),
+                            to_sqlite_timestamp(cat.get("updated_at")),
                             1 if cat.get("is_active", True) else 0,
                             cat.get("parent_server_uuid"),
                         ),

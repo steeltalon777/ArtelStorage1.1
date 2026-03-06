@@ -11,6 +11,7 @@ from .items_service import ItemsService
 from .sync_client import SyncClient, SyncHttpError
 from .sync_outbox_service import SyncOutboxService
 from .sync_settings_service import SyncSettingsService
+from .time_utils import to_sqlite_timestamp
 
 
 class SyncOrchestrator:
@@ -218,13 +219,23 @@ class SyncOrchestrator:
     def _apply_catalog_categories_page(self, site_uuid: str, categories: list, next_updated_after):
         with self.db.get_connection() as conn:
             self.categories_service.upsert_server_categories(categories, conn=conn)
-            self._set_site_state_conn(conn, site_uuid, "catalog_categories_updated_after", next_updated_after)
+            self._set_site_state_conn(
+                conn,
+                site_uuid,
+                "catalog_categories_updated_after",
+                to_sqlite_timestamp(next_updated_after),
+            )
             conn.commit()
 
     def _apply_catalog_items_page(self, site_uuid: str, items: list, next_updated_after):
         with self.db.get_connection() as conn:
             self.items_service.upsert_server_items(items, conn=conn)
-            self._set_site_state_conn(conn, site_uuid, "catalog_items_updated_after", next_updated_after)
+            self._set_site_state_conn(
+                conn,
+                site_uuid,
+                "catalog_items_updated_after",
+                to_sqlite_timestamp(next_updated_after),
+            )
             conn.commit()
 
     def _get_since_seq(self, site_uuid: str) -> int:

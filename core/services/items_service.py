@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from ..db import get_db
 from ..schema import Item
+from .time_utils import to_sqlite_timestamp
 
 
 class ItemsService:
@@ -232,7 +233,7 @@ class ItemsService:
                             item.get("unit") or "шт",
                             category_id,
                             item.get("sku"),
-                            item.get("updated_at"),
+                            to_sqlite_timestamp(item.get("updated_at")),
                             1 if item.get("is_active", True) else 0,
                             row["id"],
                         ),
@@ -250,7 +251,7 @@ class ItemsService:
                             category_id,
                             server_uuid,
                             item.get("sku"),
-                            item.get("updated_at"),
+                            to_sqlite_timestamp(item.get("updated_at")),
                             1 if item.get("is_active", True) else 0,
                         ),
                     )
